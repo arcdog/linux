@@ -8,7 +8,7 @@ from contextlib import suppress
 
 import httpx
 from aiohttp import web
-from aiogram import Bot, Dispatcher, Router, F
+from aiogram import Bot, Dispatcher, Router, F, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
@@ -96,13 +96,13 @@ def extract_user_id(text: str):
 def render_notice(action: str, user_id: str, user_obj=None, reason: str = ""):
     lines = [f"{action} user"]
     if user_obj:
-        name = getattr(user_obj, "first_name", "") or ""
-        uname = getattr(user_obj, "username", "") or ""
+        name = html.quote(getattr(user_obj, "first_name", "") or "")
+        uname = html.quote(getattr(user_obj, "username", "") or "")
         if name or uname:
             lines.append(f"Name: {name} (@{uname})" if uname else f"Name: {name}")
     lines.append(f"User ID: {user_id}")
     if reason:
-        lines.append(f"Reason: {reason}")
+        lines.append(f"Reason: {html.quote(reason)}")
     return "\n".join(lines)
 
 
@@ -182,7 +182,7 @@ async def toggle_ban(message: Message, command: CommandObject, bot: Bot):
     if not uid_target:
         return await send_temp_message(
             message,
-            f"Usage: /{command.command} <user_id> or reply",
+            f"Usage: /{command.command} [user_id] or reply",
         )
 
     if not is_ban and uid_target not in blocked_users:
@@ -235,8 +235,12 @@ async def forward_to_admin(message: Message, bot: Bot):
                 bot, chat_id, "Immediate Ban: Sent 'Hi' after verification", is_ban=True, notify_admin=False
             )
 
-        # Forwarding
-        content = f"From user: {user.first_name} (@{user.username or 'No username'})\nUser ID: {chat_id}\n---\n{message.text}"
+        # Forwarding (Escape HTML to prevent bad requests)
+        safe_first_name = html.quote(user.first_name)
+        safe_username = html.quote(user.username) if user.username else 'No username'
+        safe_text = html.quote(message.text)
+        
+        content = f"From user: {safe_first_name} (@{safe_username})\nUser ID: {chat_id}\n---\n{safe_text}"
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Ban", callback_data=f"ban_{chat_id}")]
         ])
@@ -252,6 +256,7 @@ async def forward_to_admin(message: Message, bot: Bot):
             return await send_temp_message(message, "Please reply to a message with a User ID.")
 
         with suppress(Exception):
+            # Send plain text back to user (not affected by global ParseMode if not specified)
             await bot.send_message(target_id, message.text)
             await send_temp_message(message, "Replied.")
 
