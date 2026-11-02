@@ -9,7 +9,7 @@
     "ExtensionUpdate": false,
     "SystemAddonUpdate": false,
     "Homepage": {
-      "URL": "http://www.lan/",
+      "URL": "http://10.0.0.21/",
       "Locked": true
     },
     "ExtensionSettings": {
