@@ -2,32 +2,43 @@ import hashlib
 import hmac
 import io
 import logging
-import os
 import re
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from urllib.parse import unquote
 
 import requests
 import yaml
-from flask import Flask, request, abort, send_file
+from flask import Flask, abort, request, send_file
 
 # ================= Config =================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger(__name__)
 
 ACCESS_KEY_SHA256 = "51ef50ce29aa4cf089b9b076cb06e30445090b323f0882f1251c18a06fc228ed"
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
-CACHE_EXPIRE_SECONDS = 86400
 
+ACTUAL_SOURCE = "westdata"
 CUSTOM_CLASH_NODE = BASE_DIR / "node.yaml"
 TARGET_GROUPS = ["Google"]
-INJECT_TEMPLATES = ["tun"]
 
-RENAME_MAP = {"香港": "HK", "美国": "US", "新加坡": "SG", "日本": "JP", "家宽": "ISP"}
+# Update User-Agent to clash-verge for fetching YAML directly
+CLASH_USER_AGENT = "clash-verge"
+CLASH_FINGERPRINT = "firefox"
+
+RENAME_MAP = {
+    "United States": "US",
+    "Hong Kong": "HK",
+    "Singapore": "SG",
+    "Japan": "JP",
+    "香港": "HK",
+    "美国": "US",
+    "新加坡": "SG",
+    "日本": "JP",
+}
+
 SHARED_KEYWORDS = [
     "US",
     "HK",
@@ -42,6 +53,7 @@ SHARED_KEYWORDS = [
     "新加坡",
     "日本",
 ]
+
 SHARED_EXCLUDE_KEYWORDS = [
     "官网",
     "流量",
@@ -50,19 +62,12 @@ SHARED_EXCLUDE_KEYWORDS = [
     "Australia",
     "到期",
     "重置",
-    "HK2-HY2",
-    "HK3-HY2",
-    "HK4-HY2",
-    "HK5-HY2",
+    "家宽",
+    "ISP",
+    "isp",
 ]
 
-# Set to any file name in the directory (e.g., "wukong", "shaseng")
-ACTUAL_SOURCE = "westdata"
-
 app = Flask(__name__)
-
-CLASH_USER_AGENT = "clash-verge"
-CLASH_FINGERPRINT = "firefox"
 
 
 # ================= Utils =================
@@ -80,7 +85,11 @@ def clean_node_name(name: str) -> str:
     for k, v in RENAME_MAP.items():
         name = name.replace(k, v)
     name = re.sub(r"[^\x00-\x7F]+", "", name)
-    return re.sub(r"\s+", " ", name).strip()
+    # Replace separators and surrounding whitespace with a single hyphen
+    name = re.sub(r"\s*\|\s*", "-", name)
+    # Collapse remaining whitespace into a single hyphen
+    name = re.sub(r"\s+", "-", name)
+    return name.strip("-")
 
 
 # ================= Clash Processors =================
@@ -95,6 +104,7 @@ def flow_representer(dumper, data):
 yaml.add_representer(FlowDict, flow_representer)
 
 
+# Recursively apply FlowDict only to dictionaries inside lists
 def process_data(data):
     if isinstance(data, dict):
         return {k: process_data(v) for k, v in data.items()}
@@ -152,22 +162,22 @@ def process_proxy_config_clash(proxy: Dict[str, Any], up_pref: str, down_pref: s
 
 
 def fetch_remote_yaml(
-    url: str, source_name: str, force_refresh: bool, cache_dir: Path, cache_expire: int
+    url: str, source_name: str, force_refresh: bool, cache_dir: Path
 ) -> Tuple[str, str]:
+    # Cache raw YAML content and userinfo
     cache_file = cache_dir / f"{source_name}.yaml"
     info_file = cache_dir / f"{source_name}.info"
 
-    # Check cache
+    # Return local cache directly if not forcing refresh
     if not force_refresh and cache_file.exists():
         try:
-            if time.time() - os.path.getmtime(cache_file) < cache_expire:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    raw_yaml = f.read()
-                userinfo = ""
-                if info_file.exists():
-                    with open(info_file, "r", encoding="utf-8") as f:
-                        userinfo = f.read().strip()
-                return raw_yaml, userinfo
+            with open(cache_file, "r", encoding="utf-8") as f:
+                raw_yaml = f.read()
+            userinfo = ""
+            if info_file.exists():
+                with open(info_file, "r", encoding="utf-8") as f:
+                    userinfo = f.read().strip()
+            return raw_yaml, userinfo
         except Exception:
             pass
 
@@ -205,12 +215,14 @@ def fetch_remote_yaml(
 def process_yaml_content_clash(
     remote_yaml_text: str,
     template_path: Path,
+    mixin_paths: list,
     up_pref: str,
     down_pref: str,
     shared_kw: list,
     shared_ex_kw: list,
     clean_node_fn,
 ):
+    # Parse the remote YAML configuration directly
     try:
         input_data = yaml.safe_load(remote_yaml_text)
     except yaml.YAMLError as e:
@@ -224,8 +236,21 @@ def process_yaml_content_clash(
         )
         raise ValueError(f"No valid proxies found in remote YAML. Preview: {preview}")
 
+    # Load base config.yaml
     with open(template_path, "r", encoding="utf-8") as f:
         template_data = yaml.safe_load(f)
+
+    # Merge mixin configurations
+    for m_path in mixin_paths:
+        if m_path.exists():
+            with open(m_path, "r", encoding="utf-8") as f:
+                m_data = yaml.safe_load(f)
+                if isinstance(m_data, dict):
+                    template_data.update(m_data)
+
+    # Remove mixed-port if tproxy-port exists
+    if "tproxy-port" in template_data:
+        template_data.pop("mixed-port", None)
 
     proxies_orig = input_data.get("proxies", [])
     filtered_names, _ = filter_node_names_clash(proxies_orig, shared_kw, shared_ex_kw)
@@ -237,13 +262,15 @@ def process_yaml_content_clash(
             process_proxy_config_clash(p, up_pref, down_pref)
             final_proxies.append(p)
 
+    # Fallback if no valid proxies left after filtering
     if not final_proxies and proxies_orig:
         for p in proxies_orig:
             if isinstance(p, dict):
                 p["name"] = clean_node_fn(p.get("name", ""))
                 process_proxy_config_clash(p, up_pref, down_pref)
-        final_proxies = proxies_orig
+            final_proxies = proxies_orig
 
+    # Add dns-out directly
     final_proxies.append({"name": "dns-out", "type": "dns"})
     template_data["proxies"] = final_proxies
 
@@ -336,54 +363,57 @@ def final_format_data(data, level=0):
     return data
 
 
-# ====================================================
-
-
-def handle_request(
+# ================= Handler =================
+def handle_clash_request(
     source,
     url,
     ua,
     is_force_refresh,
     cache_dir,
-    cache_expire,
     shared_kw,
     shared_ex_kw,
     clean_fn,
     custom_node_path,
     target_groups,
-    inject_templates,
     base_dir,
 ):
-    clash_config_val = None
+    mixin_paths = []
 
+    # Base config is always config.yaml
+    template_path = base_dir / "yaml/config.yaml"
+
+    # Determine routing and add specific mixin files
     if "clash_tun" in ua or "ClashMetaForAndroid" in ua:
-        clash_config_val = "tun"
-    elif (
-        any(k in ua for k in ["clash_pc", "clash_m", "clash_openwrt"])
-        or "clash" in ua.lower()
-    ):
-        clash_config_val = "standard"
+        mixin_paths.append(base_dir / "yaml/tun.yaml")
+    elif "clash_openwrt" in ua:
+        mixin_paths.append(base_dir / "yaml/tproxy.yaml")
+    elif any(k in ua for k in ["clash_pc", "clash_m"]) or "clash" in ua.lower():
+        pass  # Only uses base config.yaml
     else:
         abort(404)
 
-    config_map = {
-        "standard": (base_dir / "yaml/config.yaml", "50 Mbps", "100 Mbps"),
-        "tun": (base_dir / "yaml/config_tun.yaml", "50 Mbps", "100 Mbps"),
-    }
-    template_path, up, down = config_map[clash_config_val]
+    up, down = "50 Mbps", "100 Mbps"
 
     try:
         # Extract dynamic header from fetch_remote_yaml
         remote_yaml_text, userinfo_header = fetch_remote_yaml(
-            unquote(url), source, is_force_refresh, cache_dir, cache_expire
+            unquote(url), source, is_force_refresh, cache_dir
         )
 
+        # Process the configuration with mixins and node filtering
         output_bytes = process_yaml_content_clash(
-            remote_yaml_text, template_path, up, down, shared_kw, shared_ex_kw, clean_fn
+            remote_yaml_text,
+            template_path,
+            mixin_paths,
+            up,
+            down,
+            shared_kw,
+            shared_ex_kw,
+            clean_fn,
         )
 
-        if clash_config_val in inject_templates:
-            output_bytes = inject_custom_clash_node(output_bytes, custom_node_path)
+        # Unconditionally inject custom local nodes for all configs
+        output_bytes = inject_custom_clash_node(output_bytes, custom_node_path)
 
         final_config = yaml.safe_load(output_bytes)
         formatted_config = final_format_data(final_config)
@@ -426,11 +456,11 @@ def restrict_paths():
         abort(404)
 
 
-@app.route("/<source>")
-def process_source(source):
-    # Dynamically read from ACTUAL_SOURCE file instead of SOURCE_MAP
-    actual_source = ACTUAL_SOURCE
-    path = BASE_DIR / actual_source
+@app.route("/<req_path>")
+def process_source(req_path):
+    # Use path from URL if 'f' parameter is present, otherwise fallback to ACTUAL_SOURCE
+    source_name = req_path if "f" in request.args else ACTUAL_SOURCE
+    path = BASE_DIR / source_name
 
     if not path.is_file():
         abort(404)
@@ -444,19 +474,17 @@ def process_source(source):
         return str(e), 500
 
     if "Clash" in ua or "clash" in ua.lower():
-        return handle_request(
-            actual_source,
+        return handle_clash_request(
+            source_name,
             url,
             ua,
             is_force_refresh,
             CACHE_DIR,
-            CACHE_EXPIRE_SECONDS,
             SHARED_KEYWORDS,
             SHARED_EXCLUDE_KEYWORDS,
             clean_node_name,
             CUSTOM_CLASH_NODE,
             TARGET_GROUPS,
-            INJECT_TEMPLATES,
             BASE_DIR,
         )
 
