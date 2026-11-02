@@ -35,6 +35,8 @@ bilibili.com##.bpx-player-qoeFeedback
 
 ! 屏蔽广告拦截提示
 bilibili.com##.adblock-tips
+www.bilibili.com##.adblock-tips
+
 
 bilibili.com##.charge-btn-loaded.new-charge-btn.default-btn
 
