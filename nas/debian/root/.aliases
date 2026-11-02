@@ -3,6 +3,7 @@ alias ls='ls --color=auto'
 alias grep='grep --color=auto'
 alias gcl='git clone'
 alias ..='cd ..'
+alias sv='systemctl'
 gpl() {
     (cd /root/linux && git pull)
 }
