@@ -1,0 +1,34 @@
+[Unit]
+Description=Kavita Digital Library via Podman
+Wants=network-online.target
+After=network-online.target
+# Will not start and fails gracefully if books directory is missing
+ConditionPathExists=/data/books
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5s
+StandardOutput=null
+StandardError=null
+
+# Ensure config directory exists
+ExecStartPre=/bin/mkdir -p /data/appdata/kavita
+
+# Execute podman run for Kavita
+ExecStart=/usr/bin/podman run \
+  --replace \
+  --rm \
+  --name=kavita \
+  -p 5000:5000 \
+  --log-driver=journald \
+  --label "io.containers.autoupdate=registry" \
+  --label PODMAN_SYSTEMD_UNIT=%n \
+  -v /data/appdata/kavita:/kavita/config:Z \
+  -v /data/books:/books:ro,z \
+  docker.io/jvmilazz0/kavita:latest
+
+ExecStop=/usr/bin/podman stop -t 15 kavita
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,37 @@
+[Unit]
+Description=2FAuth 2FA Manager via Podman
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5s
+StandardOutput=null
+StandardError=null
+
+# Ensure data directory exists and generate APP_KEY env file if missing
+ExecStartPre=/bin/sh -c 'mkdir -p /data/appdata/2fauth; if [ ! -f /data/appdata/2fauth/app.key ]; then echo "APP_KEY=base64:$(head -c 32 /dev/urandom | base64)" > /data/appdata/2fauth/app.key; chmod 600 /data/appdata/2fauth/app.key; fi'
+
+# Execute podman run for 2FAuth
+ExecStart=/usr/bin/podman run \
+  --replace \
+  --rm \
+  --name=2fauth \
+  -p 8000:8000 \
+  --log-driver=journald \
+  --label "io.containers.autoupdate=registry" \
+  --label PODMAN_SYSTEMD_UNIT=%n \
+  --env-file=/data/appdata/2fauth/app.key \
+  -e APP_ENV=production \
+  -e APP_URL=http://localhost:8000 \
+  -e DB_CONNECTION=sqlite \
+  -e DB_DATABASE=/2fauth/database.sqlite \
+  -e IS_REGISTRATION_ENABLED=false \
+  -v /data/appdata/2fauth:/2fauth:Z \
+  docker.io/2fauth/2fauth:latest
+
+ExecStop=/usr/bin/podman stop -t 15 2fauth
+
+[Install]
+WantedBy=multi-user.target
