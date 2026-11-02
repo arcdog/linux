@@ -10,19 +10,19 @@ RestartSec=5s
 StandardOutput=null
 StandardError=null
 
-# Execute podman run for Jellyfin
+# Execute podman run for Jellyfin in host network mode
 ExecStart=/usr/bin/podman run \
   --replace \
   --rm \
   --name=jellyfin \
-  -p 8096:8096 \
+  --net=host \
   --log-driver=journald \
   --label "io.containers.autoupdate=registry" \
   --label PODMAN_SYSTEMD_UNIT=%n \
   --device /dev/dri:/dev/dri \
   -v /data/appdata/jellyfin:/config:Z \
   -v /data/www/media:/media:z \
-  lscr.io/linuxserver/jellyfin:latest
+  lscr.io/linuxserver/jellyfin:10.8.13
 
 ExecStop=/usr/bin/podman stop -t 10 jellyfin
 
