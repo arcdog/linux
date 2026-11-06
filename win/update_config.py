@@ -163,10 +163,10 @@ def perform_update():
                 f"[{service_name}] Update aborted due to invalid configuration - {time.strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
-    except requests.exceptions.RequestException as e:
-        print(f"[{service_name}] Request Error: {e}")
-    except Exception as e:
-        print(f"[{service_name}] Unexpected error: {e}")
+    except requests.exceptions.RequestException:
+        print(f"[{service_name}] Request Error")
+    except Exception:
+        print(f"[{service_name}] Unexpected error")
     finally:
         if os.path.exists(tmp_dir):
             try:
