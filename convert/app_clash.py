@@ -26,7 +26,7 @@ TARGET_GROUPS = ["Google"]
 
 # Update User-Agent to clash-verge for fetching YAML directly
 CLASH_USER_AGENT = "clash-verge"
-CLASH_FINGERPRINT = "firefox"
+CLASH_FINGERPRINT = "chrome"
 
 RENAME_MAP = {
     "United States": "US",
