@@ -108,6 +108,7 @@ rule-providers:
   proxy-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/proxy-site.mrs"}
   speedtest-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/speedtest-site.mrs"}
   steam-site: {proxy: M, type: http, interval: 86400, behavior: domain, format: mrs, url: "https://rule.346211.xyz/steam-site.mrs"}
+  reject-site: {proxy: M, type: http, interval: 86400, behavior: domain, format: mrs, url: "https://rule.346211.xyz/reject-site.mrs"}
   telegram-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/telegram-site.mrs"}
   telegram-ip: {proxy: M, interval: 86400, type: http, format: mrs, behavior: ipcidr, url: "https://rule.346211.xyz/telegram-ip.mrs"}
   tiktok-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/tiktok-site.mrs"}
@@ -121,6 +122,7 @@ rules:
   - AND,((DST-PORT,443),(NETWORK,UDP)),REJECT
   - DST-PORT,53,dns-out
   - DST-PORT,853,REJECT
+  - RULE-SET,reject-site,REJECT
   - RULE-SET,ad-site,AD
   - RULE-SET,ad-ip,AD
   - RULE-SET,huawei-site,REJECT-DROP
