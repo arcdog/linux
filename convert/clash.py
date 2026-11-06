@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Update User-Agent to clash-verge for fetching YAML directly
 CLASH_USER_AGENT = "clash-verge"
-CLASH_FINGERPRINT = "firefox"
+CLASH_FINGERPRINT = "chrome"
 
 
 # ================= Clash Processors =================
