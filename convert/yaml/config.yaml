@@ -57,7 +57,7 @@ dns:
 proxies: []
 
 proxy-groups:
-  - {type: select, name: M, proxies: [JP, SG, US, HK]}
+  - {type: fallback, name: M, proxies: [JP, SG, HK, US], url: "http://www.gstatic.com/generate_204", interval: 30}
   - {type: select, name: Default, proxies: [REJECT, DIRECT, M]}
   - {type: select, name: Google, proxies: [US, JP, SG, HK]}
   - {type: fallback, name: Relay, include-all-proxies: true, filter: "(?i).*(JP|SG|US|HK).*", url: "http://www.gstatic.com/generate_204", interval: 30}
