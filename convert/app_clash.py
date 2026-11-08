@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-ACTUAL_SOURCE = "westdata"
+# ACTUAL_SOURCE = "westdata"
 ACTUAL_SOURCE = "mitce"
 CUSTOM_CLASH_NODE = BASE_DIR / "node.yaml"
 
@@ -361,29 +361,56 @@ def handle_clash_request(
         base_dir,
 ):
     mixin_paths = []
-
-    # Base config is always config.yaml
     template_path = base_dir / "yaml/config.yaml"
 
-    # Determine routing and add specific mixin files
+    # Determine profile based on User-Agent to avoid cache poisoning across clients
+    profile = "pc"
     if "clash_tun" in ua or "ClashMetaForAndroid" in ua:
         mixin_paths.append(base_dir / "yaml/tun.yaml")
+        profile = "tun"
     elif "clash_openwrt" in ua:
         mixin_paths.append(base_dir / "yaml/tproxy.yaml")
+        profile = "openwrt"
     elif any(k in ua for k in ["clash_pc", "clash_m"]) or "clash" in ua.lower():
-        pass  # Only uses base config.yaml
+        pass  # Base config only
     else:
         abort(404)
 
-    up, down = "50 Mbps", "100 Mbps"
+    # Use a profile-specific cache file for the final output
+    final_cache_file = cache_dir / f"{source}_{profile}_final.yaml"
+    info_file = cache_dir / f"{source}.info"
 
+    # Fast path: Serve fully processed YAML directly from cache
+    if not is_force_refresh and final_cache_file.exists():
+        try:
+            with open(final_cache_file, "rb") as f:
+                output_bytes = f.read()
+
+            userinfo_header = ""
+            if info_file.exists():
+                with open(info_file, "r", encoding="utf-8") as f:
+                    userinfo_header = f.read().strip()
+
+            response = send_file(
+                io.BytesIO(output_bytes),
+                mimetype="text/yaml",
+                as_attachment=True,
+                download_name="config.yaml",
+            )
+            if userinfo_header:
+                response.headers["Subscription-Userinfo"] = userinfo_header
+            return response
+        except Exception as e:
+            logger.error(f"Cache read error: {e}")
+            # Fallback to slow path if reading cache fails
+
+    # Slow path: Fetch, process, format, and cache the final YAML
+    up, down = "50 Mbps", "100 Mbps"
     try:
-        # Extract dynamic header from fetch_remote_yaml
         remote_yaml_text, userinfo_header = fetch_remote_yaml(
             unquote(url), source, is_force_refresh, cache_dir
         )
 
-        # Process the configuration with mixins and node filtering
         output_bytes = process_yaml_content_clash(
             remote_yaml_text,
             template_path,
@@ -395,9 +422,10 @@ def handle_clash_request(
             clean_fn,
         )
 
-        # Unconditionally inject custom local nodes for all configs
+        # Inject custom local nodes
         output_bytes = inject_custom_clash_node(output_bytes, custom_node_path)
 
+        # Final formatting pass
         final_config = yaml.safe_load(output_bytes)
         formatted_config = final_format_data(final_config)
         output_bytes = yaml.dump(
@@ -408,14 +436,16 @@ def handle_clash_request(
             width=float("inf"),
         ).encode("utf-8")
 
+        # Save fully processed YAML bytes to cache for future requests
+        with open(final_cache_file, "wb") as f:
+            f.write(output_bytes)
+
         response = send_file(
             io.BytesIO(output_bytes),
             mimetype="text/yaml",
             as_attachment=True,
             download_name="config.yaml",
         )
-
-        # Set dynamic header if it exists
         if userinfo_header:
             response.headers["Subscription-Userinfo"] = userinfo_header
 
