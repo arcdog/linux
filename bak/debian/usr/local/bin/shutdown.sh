@@ -1,28 +1,23 @@
-#!/usr/bin/bash
+#!/bin/sh
 
-SHUTDOWN_FILE="http://10.0.0.21/shutdown"
+SHUTDOWN_FILE="http://www.lan/a"
 INTERVAL=60 # Loop interval in seconds
 
 # Initial delay before entering the loop
 sleep "$INTERVAL"
 
 while true; do
-	# Fetch remote file content with optimized timeout
-	CONTENT=$(curl -s --connect-timeout 1 --max-time 2 "$SHUTDOWN_FILE")
+    # Fetch HTTP status code only
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 1 --max-time 2 "$SHUTDOWN_FILE")
 
-	# Empty content or curl failed -> wait for next round
-	if [ -z "$CONTENT" ]; then
-		sleep "$INTERVAL"
-		continue
-	fi
+    # 200: file exists (trigger shutdown)
+    # 204: file absent (continue polling)
+    if [ "$STATUS" = "200" ]; then
+        sleep 60
+        systemctl poweroff
+        exit 0
+    fi
 
-	# If content contains 'A', execute shutdown
-	if [[ "$CONTENT" == *"A"* ]]; then
-		sleep 60
-		systemctl poweroff # Comment out during testing
-		exit 0
-	fi
-
-	# Wait before next check
-	sleep "$INTERVAL"
+    # Wait before next check
+    sleep "$INTERVAL"
 done
