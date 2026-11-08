@@ -20,10 +20,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-# ACTUAL_SOURCE = "westdata"
 ACTUAL_SOURCE = "mitce"
 CUSTOM_CLASH_NODE = BASE_DIR / "node.yaml"
-TARGET_GROUPS = ["Google"]
 
 # Update User-Agent to clash-verge for fetching YAML directly
 CLASH_USER_AGENT = "clash-verge"
@@ -41,31 +39,14 @@ RENAME_MAP = {
 }
 
 SHARED_KEYWORDS = [
-    "US",
-    "HK",
-    "SG",
-    "JP",
-    "Hong Kong",
-    "Singapore",
-    "Japan",
-    "United States",
-    "美国",
-    "香港",
-    "新加坡",
-    "日本",
+    "US", "HK", "SG", "JP",
+    "Hong Kong", "Singapore", "Japan", "United States",
+    "美国", "香港", "新加坡", "日本",
 ]
 
 SHARED_EXCLUDE_KEYWORDS = [
-    "官网",
-    "流量",
-    "倍率",
-    "剩余",
-    "Australia",
-    "到期",
-    "重置",
-    "家宽",
-    "ISP",
-    "isp",
+    "官网", "流量", "倍率", "剩余", "Australia",
+    "到期", "重置", "家宽", "ISP", "isp",
 ]
 
 app = Flask(__name__)
@@ -91,6 +72,20 @@ def clean_node_name(name: str) -> str:
     # Collapse remaining whitespace into a single hyphen
     name = re.sub(r"\s+", "-", name)
     return name.strip("-")
+
+
+def read_cache_files(cache_file: Path, info_file: Path) -> Tuple[str, str]:
+    # Read the main YAML cache
+    with open(cache_file, "r", encoding="utf-8") as f:
+        raw_yaml = f.read()
+
+    # Read the userinfo header if it exists
+    userinfo = ""
+    if info_file.exists():
+        with open(info_file, "r", encoding="utf-8") as f:
+            userinfo = f.read().strip()
+
+    return raw_yaml, userinfo
 
 
 # ================= Clash Processors =================
@@ -122,7 +117,7 @@ def process_data(data):
 
 
 def filter_node_names_clash(
-    proxies: List[Any], shared_kw: List[str], shared_ex_kw: List[str]
+        proxies: List[Any], shared_kw: List[str], shared_ex_kw: List[str]
 ) -> Tuple[List[str], List[str]]:
     all_names = [
         str(p.get("name"))
@@ -135,23 +130,19 @@ def filter_node_names_clash(
         n
         for n in all_names
         if any(kw in n.lower() for kw in valid_kw)
-        and not any(ex in n.lower() for ex in valid_ex_kw)
+           and not any(ex in n.lower() for ex in valid_ex_kw)
     ]
     return filtered, all_names
 
 
 def process_proxy_config_clash(proxy: Dict[str, Any], up_pref: str, down_pref: str):
-    if not isinstance(proxy, dict):
-        return
     p_type = proxy.get("type")
     up_pref, down_pref = str(up_pref or "100"), str(down_pref or "100")
     if p_type == "hysteria2":
         proxy.update(
             {
                 "up": up_pref if "bps" in up_pref.lower() else f"{up_pref} Mbps",
-                "down": (
-                    down_pref if "bps" in down_pref.lower() else f"{down_pref} Mbps"
-                ),
+                "down": down_pref if "bps" in down_pref.lower() else f"{down_pref} Mbps",
             }
         )
         proxy.pop("skip-cert-verify", None)
@@ -163,24 +154,17 @@ def process_proxy_config_clash(proxy: Dict[str, Any], up_pref: str, down_pref: s
 
 
 def fetch_remote_yaml(
-    url: str, source_name: str, force_refresh: bool, cache_dir: Path
+        url: str, source_name: str, force_refresh: bool, cache_dir: Path
 ) -> Tuple[str, str]:
-    # Cache raw YAML content and userinfo
     cache_file = cache_dir / f"{source_name}.yaml"
     info_file = cache_dir / f"{source_name}.info"
 
     # Return local cache directly if not forcing refresh
     if not force_refresh and cache_file.exists():
         try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                raw_yaml = f.read()
-            userinfo = ""
-            if info_file.exists():
-                with open(info_file, "r", encoding="utf-8") as f:
-                    userinfo = f.read().strip()
-            return raw_yaml, userinfo
-        except Exception:
-            pass
+            return read_cache_files(cache_file, info_file)
+        except Exception as e:
+            logger.error(f"Error: {e}")
 
     # Fetch remote
     try:
@@ -199,29 +183,27 @@ def fetch_remote_yaml(
 
         return raw_yaml, userinfo
     except Exception as e:
-        logger.error(f"Fetch Error: {e}")
+        logger.error(f"Error: {e}")
 
     # Fallback to cache if fetch fails
     if cache_file.exists():
-        with open(cache_file, "r", encoding="utf-8") as f:
-            raw_yaml = f.read()
-        userinfo = ""
-        if info_file.exists():
-            with open(info_file, "r", encoding="utf-8") as f:
-                userinfo = f.read().strip()
-        return raw_yaml, userinfo
+        try:
+            return read_cache_files(cache_file, info_file)
+        except Exception as e:
+            logger.error(f"Error: {e}")
+
     raise RuntimeError("Fetch and cache failed")
 
 
 def process_yaml_content_clash(
-    remote_yaml_text: str,
-    template_path: Path,
-    mixin_paths: list,
-    up_pref: str,
-    down_pref: str,
-    shared_kw: list,
-    shared_ex_kw: list,
-    clean_node_fn,
+        remote_yaml_text: str,
+        template_path: Path,
+        mixin_paths: list,
+        up_pref: str,
+        down_pref: str,
+        shared_kw: list,
+        shared_ex_kw: list,
+        clean_node_fn,
 ):
     # Parse the remote YAML configuration directly
     try:
@@ -366,17 +348,16 @@ def final_format_data(data, level=0):
 
 # ================= Handler =================
 def handle_clash_request(
-    source,
-    url,
-    ua,
-    is_force_refresh,
-    cache_dir,
-    shared_kw,
-    shared_ex_kw,
-    clean_fn,
-    custom_node_path,
-    target_groups,
-    base_dir,
+        source,
+        url,
+        ua,
+        is_force_refresh,
+        cache_dir,
+        shared_kw,
+        shared_ex_kw,
+        clean_fn,
+        custom_node_path,
+        base_dir,
 ):
     mixin_paths = []
 
@@ -439,7 +420,7 @@ def handle_clash_request(
 
         return response
     except Exception as e:
-        logger.error(f"Clash Error: {e}")
+        logger.error(f"Error: {e}")
         return str(e), 500
 
 
@@ -452,7 +433,7 @@ def restrict_paths():
     if not (key := request.args.get("key")):
         abort(404)
     if not hmac.compare_digest(
-        hashlib.sha256(key.encode("utf-8")).hexdigest(), ACCESS_KEY_SHA256
+            hashlib.sha256(key.encode("utf-8")).hexdigest(), ACCESS_KEY_SHA256
     ):
         abort(404)
 
@@ -485,7 +466,6 @@ def process_source(req_path):
             SHARED_EXCLUDE_KEYWORDS,
             clean_node_name,
             CUSTOM_CLASH_NODE,
-            TARGET_GROUPS,
             BASE_DIR,
         )
 
