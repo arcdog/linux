@@ -49,3 +49,8 @@ dns:
     "rule-set:steam-site": "https://cloudflare-dns.com/dns-query#Steam"
     "rule-set:huawei-site": "rcode://refused"
     "rule-set:codeberg-site": "https://cloudflare-dns.com/dns-query#GitHub"
+
+
+proxy-groups:
+      - {type: select, name: Google, proxies: [US, JP, SG, HK, US-G]}
+
