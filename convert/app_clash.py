@@ -20,8 +20,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-ACTUAL_SOURCE = "westdata"
-# ACTUAL_SOURCE = "mitce"
+# ACTUAL_SOURCE = "westdata"
+ACTUAL_SOURCE = "mitce"
 # ACTUAL_SOURCE = "bajie"
 
 CUSTOM_CLASH_NODE = BASE_DIR / "node.yaml"
