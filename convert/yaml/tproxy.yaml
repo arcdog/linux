@@ -3,13 +3,13 @@ routing-mark: 666
 external-controller: 10.0.0.1:9090
 external-ui-url: https://www.346211.xyz/dist_openwrt.zip
 hosts:
-    "emby.lan": 10.0.0.21
-    "book.lan": 10.0.0.21
-    "www.lan": 10.0.0.21
-    "jellyfin.lan": 10.0.0.21
-    "pve.lan": 10.0.0.88
-    "p.lan": 10.0.0.21
-    "ha.lan": 10.0.0.21
+  "emby.lan": 10.0.0.21
+  "book.lan": 10.0.0.21
+  "www.lan": 10.0.0.21
+  "jellyfin.lan": 10.0.0.21
+  "pve.lan": 10.0.0.88
+  "p.lan": 10.0.0.21
+  "ha.lan": 10.0.0.21
 dns:
   enable: true
   prefer-h3: false
@@ -50,7 +50,24 @@ dns:
     "rule-set:huawei-site": "rcode://refused"
     "rule-set:codeberg-site": "https://cloudflare-dns.com/dns-query#GitHub"
 
-
 proxy-groups:
-      - {type: select, name: Google, proxies: [US, JP, SG, HK, US-G]}
-
+  - {type: select, name: M, proxies: [JP, SG, US, HK]}
+  - {type: select, name: Default, proxies: [REJECT, DIRECT, M]}
+  - {type: select, name: Google, proxies: [US-G, US, JP, SG, HK]}
+  - {type: fallback, name: Relay, include-all-proxies: true, filter: "(?i).*(JP|SG|US|HK).*", url: "http://www.gstatic.com/generate_204", interval: 30}
+  - {type: select, name: OpenAi, proxies: [JP, SG, US, HK]}
+  - {type: select, name: Telegram, proxies: [JP, SG, US, HK]}
+  - {type: select, name: Steam, proxies: [DIRECT, JP, SG, US, HK]}
+  - {type: select, name: PikPak, proxies: [SG_load-balance, HK_load-balance, SG, JP, US, HK]}
+  - {type: select, name: GitHub, proxies: [JP, SG, US, HK]}
+  - {type: select, name: Microsoft, proxies: [DIRECT, JP, SG, US, HK]}
+  - {type: select, name: TikTok, proxies: [JP]}
+  - {type: select, name: Twitter, proxies: [US]}
+  - {type: select, name: Youtube, include-all-proxies: true, filter: "(?i)^(?=.*(US))(?!.*(gemini|US-G)).*$"}
+  - {type: select, name: AD, proxies: [REJECT-DROP, PASS]}
+  - {type: url-test, url: "https://www.gstatic.com/generate_204", interval: 30, tolerance: 300, timeout: 3000, max-failed-times: 3, include-all-proxies: true, hidden: true, name: HK, filter: "(?i)^(?=.*(HK))(?!.*(UDP|HY2)).*$"}
+  - {type: url-test, url: "https://www.gstatic.com/generate_204", interval: 30, tolerance: 300, timeout: 3000, max-failed-times: 3, include-all-proxies: true, hidden: true, name: JP, filter: "(?i).*(JP).*"}
+  - {type: url-test, url: "https://www.gstatic.com/generate_204", interval: 30, tolerance: 300, timeout: 3000, max-failed-times: 3, include-all-proxies: true, hidden: true, name: SG, filter: "(?i).*(SG).*"}
+  - {type: url-test, url: "https://www.gstatic.com/generate_204", interval: 30, tolerance: 300, timeout: 3000, max-failed-times: 3, include-all-proxies: true, hidden: true, name: US, filter: "(?i)^(?!.*US-G).*US.*"}
+  - {type: load-balance, url: "https://www.gstatic.com/generate_204", interval: 30, timeout: 3000, max-failed-times: 3, include-all-proxies: true, strategy: round-robin, hidden: true, name: SG_load-balance, filter: "(?i).*(SG).*"}
+  - {type: load-balance, url: "https://www.gstatic.com/generate_204", interval: 30, timeout: 3000, max-failed-times: 3, include-all-proxies: true, strategy: round-robin, hidden: true, name: HK_load-balance, filter: "(?i).*(HK).*"}
