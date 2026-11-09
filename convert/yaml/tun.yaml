@@ -14,7 +14,6 @@ dns:
     - "+.googleapis.cn"
     - "rule-set:googlefcm-site"
     - "rule-set:cloudflare-site"
-  use-hosts: true
   default-nameserver: [223.5.5.5#DIRECT]
   proxy-server-nameserver: ["https://dns.alidns.com/dns-query#DIRECT"]
   nameserver: ["https://cloudflare-dns.com/dns-query#M"]
@@ -47,16 +46,16 @@ tun:
   strict-route: true
 
 proxy-groups:
-  - {type: select, name: M, proxies: [JP, SG, US, HK]}
+  - {type: select, name: M, proxies: [HK, JP, SG, US]}
   - {type: select, name: Default, proxies: [REJECT, DIRECT, M]}
   - {type: select, name: Google, proxies: [US, JP, SG, HK]}
-  - {type: fallback, name: Relay, include-all-proxies: true, filter: "(?i).*(JP|SG|US|HK).*", url: "http://www.gstatic.com/generate_204", interval: 30}
+  - {type: fallback, name: Relay, include-all-proxies: true, filter: "(?i).*(JP|SG|HK).*", url: "http://www.gstatic.com/generate_204", interval: 30}
   - {type: select, name: OpenAi, proxies: [JP, SG, US, HK]}
-  - {type: select, name: Telegram, proxies: [JP, SG, US, HK]}
-  - {type: select, name: Steam, proxies: [DIRECT, JP, SG, US, HK]}
-  - {type: select, name: PikPak, proxies: [SG_load-balance, HK_load-balance, SG, JP, US, HK]}
-  - {type: select, name: GitHub, proxies: [JP, SG, US, HK]}
-  - {type: select, name: Microsoft, proxies: [DIRECT, JP, SG, US, HK]}
+  - {type: select, name: Telegram, proxies: [HK, JP, SG, US]}
+  - {type: select, name: Steam, proxies: [HK, DIRECT, JP, SG, US]}
+  - {type: select, name: PikPak, proxies: [HK_load-balance, SG_load-balance, DIRECT, SG, HK]}
+  - {type: select, name: GitHub, proxies: [HK, JP, SG, US]}
+  - {type: select, name: Microsoft, proxies: [HK, DIRECT, JP, SG, US]}
   - {type: select, name: TikTok, proxies: [JP]}
   - {type: select, name: Twitter, proxies: [US]}
   - {type: select, name: Youtube, include-all-proxies: true, filter: "(?i)^(?=.*(US))(?!.*(gemini|US-G)).*$"}
