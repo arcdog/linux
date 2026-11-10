@@ -127,10 +127,21 @@ def perform_update():
             f"[{service_name}] Downloading config... (User-Agent: {headers['User-Agent']})"
         )
 
-        response = requests.get(
-            url, headers=headers, timeout=(10, 30), impersonate="firefox"
-        )
-        response.raise_for_status()
+        # Retry mechanism: 3 retries, 10s interval
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    url, headers=headers, timeout=(10, 30), impersonate="firefox"
+                )
+                response.raise_for_status()
+                break
+            except requests.exceptions.RequestException as e:
+                print(f"[{service_name}] Request Error on attempt {attempt + 1}")
+                if attempt < 2:
+                    time.sleep(10)
+                else:
+                    print(f"[{service_name}] Download failed after 3 attempts.")
+                    return False
 
         with open(temp_path, "wb") as f:
             f.write(response.content)
@@ -163,8 +174,6 @@ def perform_update():
                 f"[{service_name}] Update aborted due to invalid configuration - {time.strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
-    except requests.exceptions.RequestException:
-        print(f"[{service_name}] Request Error")
     except Exception:
         print(f"[{service_name}] Unexpected error")
     finally:
