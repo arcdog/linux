@@ -95,6 +95,7 @@ rule-providers:
   mozilla-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/mozilla-site.mrs"}
   gfw-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/gfw-site.mrs"}
   github-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/github-site.mrs"}
+  github-ip: {proxy: M, interval: 86400, type: http, format: mrs, behavior: ipcidr, url: "https://rule.346211.xyz/github-ipsite.mrs"}
   google-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/google-site.mrs"}
   google-ip: {proxy: M, interval: 86400, type: http, format: mrs, behavior: ipcidr, url: "https://rule.346211.xyz/google-ip.mrs"}
   googlefcm-site: {proxy: M, interval: 86400, type: http, format: mrs, behavior: domain, url: "https://rule.346211.xyz/googlefcm-site.mrs"}
@@ -164,6 +165,7 @@ rules:
   - RULE-SET,gfw-site,M
   - RULE-SET,cn-site,DIRECT
   - RULE-SET,direct-ip,DIRECT
+  - RULE-SET,github-ip,GitHub
   - RULE-SET,wechat-ip,DIRECT
   - RULE-SET,cloudflare-ip,M
   - RULE-SET,pikpak-ip,PikPak
