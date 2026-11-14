@@ -242,6 +242,10 @@ def process_videos(root_dir):
                     "h264_qsv",
                     "-global_quality",
                     "23",
+                    "-fps_mode",  # Force CFR to fix web audio/video sync
+                    "cfr",
+                    "-pix_fmt",   # Force 8-bit standard format
+                    "nv12",
                 ] + audio_args + [
                     "-movflags",
                     "+faststart",
@@ -249,7 +253,7 @@ def process_videos(root_dir):
                 ]
             else:
                 # Linux: VA-API
-                filters = ["format=nv12"]
+                filters = ["format=nv12"]  # nv12 format ensures 8-bit processing for VA-API
                 if downscale:
                     filters.append(
                         f"scale=-2:{THRESHOLD}" if w >= h else f"scale={THRESHOLD}:-2"
@@ -271,6 +275,8 @@ def process_videos(root_dir):
                         "h264_vaapi",
                         "-qp",
                         "23",
+                        "-fps_mode",  # Force CFR to fix web audio/video sync
+                        "cfr",
                     ]
                     + audio_args
                     + [
