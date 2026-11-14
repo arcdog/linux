@@ -44,6 +44,11 @@ def clash_to_singbox_node(c_node: dict) -> dict:
                     "public_key": ropts.get("public-key", ""),
                     "short_id": ropts.get("short-id", ""),
                 }
+                # Inject utls block required by reality client
+                sb_node["tls"]["utls"] = {
+                    "enabled": True,
+                    "fingerprint": "chrome"
+                }
 
         # Transport mapping
         network = c_node.get("network", "tcp")
