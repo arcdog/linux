@@ -29,7 +29,6 @@ def set_terminal_title(title):
 
 
 def is_faststart(filepath):
-    # Check if 'moov' atom appears before 'mdat' atom
     try:
         with open(filepath, "rb") as f:
             while True:
@@ -44,7 +43,6 @@ def is_faststart(filepath):
                 if atom_type == b"mdat":
                     return False
 
-                # Skip to the next atom
                 f.seek(size - 8, 1)
     except Exception:
         pass
@@ -52,7 +50,6 @@ def is_faststart(filepath):
 
 
 def get_video_audio_info(file_path):
-    # Added pix_fmt, r_frame_rate, avg_frame_rate to detect 10-bit and VFR
     cmd = [
         "ffprobe",
         "-v",
@@ -85,7 +82,6 @@ def get_video_audio_info(file_path):
             elif s_type == "audio" and a_codec == "none":
                 a_codec = stream.get("codec_name", "unknown")
 
-        # Basic VFR heuristic: if base framerate differs from average framerate
         is_vfr = (r_fps != "0/0" and avg_fps != "0/0" and r_fps != avg_fps)
         return v_w, v_h, v_codec, a_codec, pix_fmt, is_vfr
     except:
@@ -117,14 +113,15 @@ def process_videos(root_dir):
     print(f"[*] Found {total_files} potential files. Starting concurrent probing...")
 
     def probe_task(file_path):
+        # Record the current modification time of the file
+        original_mtime = file_path.stat().st_mtime
+        
         w, h, v_codec, a_codec, pix_fmt, is_vfr = get_video_audio_info(file_path)
         short_side = min(w, h)
 
         needs_downscale = short_side > THRESHOLD
         needs_v_transcode = v_codec != "h264"
         needs_a_transcode = a_codec != "aac" and a_codec != "none"
-        
-        # Trigger transcode if it's 10-bit (e.g., yuv420p10le) or non-standard web format
         needs_pix_fmt_fix = "10" in pix_fmt or pix_fmt not in ("yuv420p", "nv12", "unknown")
 
         is_transcode = (
@@ -140,55 +137,26 @@ def process_videos(root_dir):
             needs_faststart = not is_faststart(file_path)
 
         return (
-            file_path,
-            w,
-            h,
-            v_codec,
-            a_codec,
-            is_transcode,
-            needs_downscale,
-            needs_a_transcode,
-            needs_faststart,
+            file_path, w, h, v_codec, a_codec,
+            is_transcode, needs_downscale, needs_a_transcode, needs_faststart, original_mtime
         )
 
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = {executor.submit(probe_task, f): f for f in files_to_probe}
-
         completed = 0
         for future in as_completed(futures):
             completed += 1
             (
-                file_path,
-                w,
-                h,
-                v_codec,
-                a_codec,
-                is_transcode,
-                needs_downscale,
-                needs_a_transcode,
-                needs_faststart,
+                file_path, w, h, v_codec, a_codec,
+                is_transcode, needs_downscale, needs_a_transcode, needs_faststart, original_mtime
             ) = future.result()
 
             print(f"\r    -> Probing ({completed}/{total_files})...", end="")
             dst = file_path.with_suffix(".mp4")
 
-            if is_transcode:
+            if is_transcode or needs_faststart:
                 targets.append(
-                    (
-                        file_path,
-                        w,
-                        h,
-                        v_codec,
-                        a_codec,
-                        dst,
-                        True,
-                        needs_downscale,
-                        needs_a_transcode,
-                    )
-                )
-            elif needs_faststart:
-                targets.append(
-                    (file_path, w, h, v_codec, a_codec, dst, False, False, False)
+                    (file_path, w, h, v_codec, a_codec, dst, is_transcode, needs_downscale, needs_a_transcode, original_mtime)
                 )
 
     print("\n" + "-" * 50)
@@ -197,96 +165,66 @@ def process_videos(root_dir):
         print("[i] All files are already optimized.")
         return
 
-    print(
-        f"[i] Filtered {total_targets} targets for execution. Thread limit: {CPU_THREADS}\n"
-        + "-" * 50
-    )
+    print(f"[i] Filtered {total_targets} targets for execution. Thread limit: {CPU_THREADS}\n" + "-" * 50)
 
-    for index, (
-        src,
-        w,
-        h,
-        v_codec,
-        a_codec,
-        dst,
-        is_transcode,
-        downscale,
-        transcode_audio,
-    ) in enumerate(targets):
-        task_desc = f"Video: {w}x{h} {v_codec}, Audio: {a_codec}"
-        if not is_transcode:
-            task_desc = "Faststart Optimization Only"
-
-        print(f"[+] Task {index + 1}/{total_targets} | {src.name} ({task_desc})")
-        set_terminal_title(f"[{index+1}/{total_targets}] {src.name}")
+    for index, (src, w, h, v_codec, a_codec, dst, is_transcode, downscale, transcode_audio, original_mtime) in enumerate(targets):
+        
+        # Check 1: Skip if file is missing or modified time changed (processed by another node)
+        if not src.exists() or src.stat().st_mtime != original_mtime:
+            print(f"[!] Task {index + 1}/{total_targets} | Skipped (Already processed by another device): {src.name}")
+            continue
 
         temp_dst = dst.with_suffix(".tmp.mp4")
 
-        if is_transcode:
-            audio_args = (
-                ["-c:a", "aac", "-b:a", "128k"] if transcode_audio else ["-c:a", "copy"]
-            )
-            if a_codec == "none":
-                audio_args = ["-an"]
-
-            if IS_WINDOWS:
-                filters = []
-                if downscale:
-                    filters.append(
-                        f"scale=-2:{THRESHOLD}" if w >= h else f"scale={THRESHOLD}:-2"
-                    )
-
-                command = [
-                    "ffmpeg", "-y", "-threads", str(CPU_THREADS), "-i", str(src)
-                ]
-                if filters:
-                    command += ["-vf", ",".join(filters)]
-                command += [
-                    "-c:v", "h264_qsv",
-                    "-global_quality", "23",
-                    "-fps_mode", "cfr",
-                    "-pix_fmt", "nv12",
-                ] + audio_args + [
-                    "-movflags", "+faststart", str(temp_dst)
-                ]
-            else:
-                filters = ["format=nv12"]
-                if downscale:
-                    filters.append(
-                        f"scale=-2:{THRESHOLD}" if w >= h else f"scale={THRESHOLD}:-2"
-                    )
-
-                command = (
-                    [
-                        "ffmpeg", "-y",
-                        "-vaapi_device", "/dev/dri/renderD128",
-                        "-threads", str(CPU_THREADS),
-                        "-i", str(src),
-                        "-vf", ",".join(filters) + ",hwupload",
-                        "-c:v", "h264_vaapi",
-                        "-qp", "23",
-                        "-fps_mode", "cfr",
-                    ]
-                    + audio_args
-                    + [
-                        "-movflags", "+faststart", str(temp_dst)
-                    ]
-                )
-        else:
-            command = [
-                "ffmpeg", "-y", "-v", "error", "-i", str(src),
-                "-c", "copy", "-movflags", "+faststart", str(temp_dst)
-            ]
+        # Check 2: Try to exclusively create tmp file. Skip if exists (currently processing by another node)
+        try:
+            temp_dst.touch(exist_ok=False)
+        except FileExistsError:
+            print(f"[!] Task {index + 1}/{total_targets} | Skipped (Currently processing by another device): {src.name}")
+            continue
 
         try:
+            task_desc = f"Video: {w}x{h} {v_codec}, Audio: {a_codec}"
+            if not is_transcode:
+                task_desc = "Faststart Optimization Only"
+
+            print(f"[+] Task {index + 1}/{total_targets} | {src.name} ({task_desc})")
+            set_terminal_title(f"[{index+1}/{total_targets}] {src.name}")
+
+            if is_transcode:
+                audio_args = ["-c:a", "aac", "-b:a", "128k"] if transcode_audio else ["-c:a", "copy"]
+                if a_codec == "none":
+                    audio_args = ["-an"]
+
+                if IS_WINDOWS:
+                    filters = [f"scale=-2:{THRESHOLD}" if w >= h else f"scale={THRESHOLD}:-2"] if downscale else []
+                    command = ["ffmpeg", "-y", "-threads", str(CPU_THREADS), "-i", str(src)]
+                    if filters:
+                        command += ["-vf", ",".join(filters)]
+                    command += [
+                        "-c:v", "h264_qsv", "-global_quality", "23",
+                        "-fps_mode", "cfr", "-pix_fmt", "nv12"
+                    ] + audio_args + ["-movflags", "+faststart", str(temp_dst)]
+                else:
+                    filters = ["format=nv12"]
+                    if downscale:
+                        filters.append(f"scale=-2:{THRESHOLD}" if w >= h else f"scale={THRESHOLD}:-2")
+                    command = (
+                        ["ffmpeg", "-y", "-vaapi_device", "/dev/dri/renderD128", "-threads", str(CPU_THREADS),
+                         "-i", str(src), "-vf", ",".join(filters) + ",hwupload", "-c:v", "h264_vaapi",
+                         "-qp", "23", "-fps_mode", "cfr"] + audio_args + ["-movflags", "+faststart", str(temp_dst)]
+                    )
+            else:
+                command = [
+                    "ffmpeg", "-y", "-v", "error", "-i", str(src),
+                    "-c", "copy", "-movflags", "+faststart", str(temp_dst)
+                ]
+
             process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                encoding="utf-8",
-                errors="replace",
+                command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                universal_newlines=True, encoding="utf-8", errors="replace"
             )
+            
             for line in process.stdout:
                 if "frame=" in line:
                     print(f"\r    {line.strip()}", end="")
@@ -303,6 +241,7 @@ def process_videos(root_dir):
                 if temp_dst.exists():
                     temp_dst.unlink()
                 print(f"\n[!] Failed (ffmpeg exit code {process.returncode})")
+
         except Exception as e:
             if temp_dst.exists():
                 temp_dst.unlink()
@@ -324,12 +263,11 @@ def merge_sequential_videos(base_dir):
     for root, dirs, files in os.walk(base_dir):
         folder_name = os.path.basename(root)
         seq_files = []
-
-        pattern = re.compile(
-            rf"^(?:{re.escape(folder_name)}[-_]?)?(\d+)(?:-(\d+))?\.mp4$", re.IGNORECASE
-        )
+        pattern = re.compile(rf"^(?:{re.escape(folder_name)}[-_]?)?(\d+)(?:-(\d+))?\.mp4$", re.IGNORECASE)
 
         for f in files:
+            if f.endswith(".tmp.mp4"):
+                continue
             match = pattern.match(f)
             if match:
                 start_num = int(match.group(1))
@@ -340,8 +278,7 @@ def merge_sequential_videos(base_dir):
             continue
 
         seq_files.sort(key=lambda x: (x["start"], -x["end"]))
-        valid_chain = []
-        expected_next_start = None
+        valid_chain, expected_next_start = [], None
 
         for curr in seq_files:
             if expected_next_start is None:
@@ -361,42 +298,61 @@ def merge_sequential_videos(base_dir):
 
         min_num = valid_chain[0]["start"]
         max_num = valid_chain[-1]["end"]
-
         output = f"{folder_name}_{min_num}-{max_num}.mp4"
-        output_path = os.path.join(root, output)
+        output_path = Path(root) / output
 
-        if os.path.exists(output_path):
+        if output_path.exists():
             continue
 
-        inputs = [x["filename"] for x in valid_chain]
-        print(f"\n[+] Merging {len(inputs)} files into {output} in {root}")
-        ts_files = []
+        # Defensive tmp lock for merging
+        merge_tmp = output_path.with_suffix(".tmp.mp4")
+        try:
+            merge_tmp.touch(exist_ok=False)
+        except FileExistsError:
+            print(f"[!] Skipped merging {output} (tmp exists, another device is processing)")
+            continue
 
-        for i, video in enumerate(inputs):
-            ts_file = f"temp_{i}.ts"
-            ts_files.append(ts_file)
-            cmd_convert = [
-                "ffmpeg", "-y", "-v", "error", "-i", video,
-                "-c", "copy", "-bsf:v", "h264_mp4toannexb",
-                "-f", "mpegts", ts_file
-            ]
-            subprocess.run(cmd_convert, cwd=root, check=True)
+        try:
+            inputs = [x["filename"] for x in valid_chain]
+            
+            # Time gap check: Ensure parts to be merged haven't been deleted by another node
+            missing_inputs = [f for f in inputs if not (Path(root) / f).exists()]
+            if missing_inputs:
+                if merge_tmp.exists():
+                    merge_tmp.unlink()
+                continue
+                
+            print(f"\n[+] Merging {len(inputs)} files into {output} in {root}")
+            ts_files = []
 
-        concat_string = "concat:" + "|".join(ts_files)
-        cmd_merge = [
-            "ffmpeg", "-y", "-v", "error", "-i", concat_string,
-            "-c", "copy", "-bsf:a", "aac_adtstoasc",
-            "-movflags", "+faststart", output
-        ]
-        subprocess.run(cmd_merge, cwd=root, check=True)
+            for i, video in enumerate(inputs):
+                ts_file = f"temp_{i}.ts"
+                ts_files.append(ts_file)
+                subprocess.run(
+                    ["ffmpeg", "-y", "-v", "error", "-i", video, "-c", "copy", "-bsf:v", "h264_mp4toannexb", "-f", "mpegts", ts_file],
+                    cwd=root, check=True
+                )
 
-        for ts in ts_files:
-            ts_path = os.path.join(root, ts)
-            if os.path.exists(ts_path):
-                os.remove(ts_path)
+            concat_string = "concat:" + "|".join(ts_files)
+            subprocess.run(
+                ["ffmpeg", "-y", "-v", "error", "-i", concat_string, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart", str(merge_tmp.name)],
+                cwd=root, check=True
+            )
 
-        print(f"[✔] Merged successfully: {output}")
-        merged_count += 1
+            merge_tmp.replace(output_path)
+
+            for ts in ts_files:
+                ts_path = Path(root) / ts
+                if ts_path.exists():
+                    ts_path.unlink()
+
+            print(f"[✔] Merged successfully: {output}")
+            merged_count += 1
+            
+        except Exception as e:
+            if merge_tmp.exists():
+                merge_tmp.unlink()
+            print(f"\n[!] Merge Error: {e}")
 
     if merged_count == 0:
         print("[i] No files need merging.")
