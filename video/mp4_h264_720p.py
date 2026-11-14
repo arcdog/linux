@@ -52,13 +52,13 @@ def is_faststart(filepath):
 
 
 def get_video_audio_info(file_path):
-    # Get width, height, video codec, and audio codec using ffprobe
+    # Added pix_fmt, r_frame_rate, avg_frame_rate to detect 10-bit and VFR
     cmd = [
         "ffprobe",
         "-v",
         "error",
         "-show_entries",
-        "stream=width,height,codec_name,codec_type",
+        "stream=width,height,codec_name,codec_type,pix_fmt,r_frame_rate,avg_frame_rate",
         "-of",
         "json",
         str(file_path),
@@ -69,6 +69,9 @@ def get_video_audio_info(file_path):
 
         v_w, v_h, v_codec = 0, 0, "unknown"
         a_codec = "none"
+        pix_fmt = "unknown"
+        r_fps = "0/0"
+        avg_fps = "0/0"
 
         for stream in data.get("streams", []):
             s_type = stream.get("codec_type")
@@ -76,12 +79,17 @@ def get_video_audio_info(file_path):
                 v_w = int(stream.get("width", 0))
                 v_h = int(stream.get("height", 0))
                 v_codec = stream.get("codec_name", "unknown")
+                pix_fmt = stream.get("pix_fmt", "unknown")
+                r_fps = stream.get("r_frame_rate", "0/0")
+                avg_fps = stream.get("avg_frame_rate", "0/0")
             elif s_type == "audio" and a_codec == "none":
                 a_codec = stream.get("codec_name", "unknown")
 
-        return v_w, v_h, v_codec, a_codec
+        # Basic VFR heuristic: if base framerate differs from average framerate
+        is_vfr = (r_fps != "0/0" and avg_fps != "0/0" and r_fps != avg_fps)
+        return v_w, v_h, v_codec, a_codec, pix_fmt, is_vfr
     except:
-        return 0, 0, "unknown", "unknown"
+        return 0, 0, "unknown", "unknown", "unknown", False
 
 
 def process_videos(root_dir):
@@ -92,7 +100,6 @@ def process_videos(root_dir):
     set_terminal_title("H264 & 720P Optimizer")
 
     print(f"\n[*] Scanning file list in: {root_dir}")
-    # Phase 1: Local file list matching without network I/O
     files_to_probe = [
         f
         for f in root_dir.rglob("*")
@@ -109,15 +116,24 @@ def process_videos(root_dir):
     targets = []
     print(f"[*] Found {total_files} potential files. Starting concurrent probing...")
 
-    # Wrapper for threaded probing to include faststart check over network I/O
     def probe_task(file_path):
-        w, h, v_codec, a_codec = get_video_audio_info(file_path)
+        w, h, v_codec, a_codec, pix_fmt, is_vfr = get_video_audio_info(file_path)
         short_side = min(w, h)
 
         needs_downscale = short_side > THRESHOLD
         needs_v_transcode = v_codec != "h264"
         needs_a_transcode = a_codec != "aac" and a_codec != "none"
-        is_transcode = needs_downscale or needs_v_transcode or needs_a_transcode
+        
+        # Trigger transcode if it's 10-bit (e.g., yuv420p10le) or non-standard web format
+        needs_pix_fmt_fix = "10" in pix_fmt or pix_fmt not in ("yuv420p", "nv12", "unknown")
+
+        is_transcode = (
+            needs_downscale 
+            or needs_v_transcode 
+            or needs_a_transcode 
+            or needs_pix_fmt_fix 
+            or is_vfr
+        )
 
         needs_faststart = False
         if not is_transcode and file_path.suffix.lower() == ".mp4":
@@ -135,7 +151,6 @@ def process_videos(root_dir):
             needs_faststart,
         )
 
-    # Phase 2: Concurrent network I/O
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = {executor.submit(probe_task, f): f for f in files_to_probe}
 
@@ -154,9 +169,7 @@ def process_videos(root_dir):
                 needs_faststart,
             ) = future.result()
 
-            # Real-time progress
             print(f"\r    -> Probing ({completed}/{total_files})...", end="")
-
             dst = file_path.with_suffix(".mp4")
 
             if is_transcode:
@@ -179,7 +192,6 @@ def process_videos(root_dir):
                 )
 
     print("\n" + "-" * 50)
-
     total_targets = len(targets)
     if total_targets == 0:
         print("[i] All files are already optimized.")
@@ -208,7 +220,6 @@ def process_videos(root_dir):
         print(f"[+] Task {index + 1}/{total_targets} | {src.name} ({task_desc})")
         set_terminal_title(f"[{index+1}/{total_targets}] {src.name}")
 
-        # Temporary path for atomic replacement processing
         temp_dst = dst.with_suffix(".tmp.mp4")
 
         if is_transcode:
@@ -218,9 +229,7 @@ def process_videos(root_dir):
             if a_codec == "none":
                 audio_args = ["-an"]
 
-            # Platform-specific hardware encoding parameters
             if IS_WINDOWS:
-                # Windows: Intel Quick Sync Video (QSV)
                 filters = []
                 if downscale:
                     filters.append(
@@ -228,32 +237,20 @@ def process_videos(root_dir):
                     )
 
                 command = [
-                    "ffmpeg",
-                    "-y",
-                    "-threads",
-                    str(CPU_THREADS),
-                    "-i",
-                    str(src),
+                    "ffmpeg", "-y", "-threads", str(CPU_THREADS), "-i", str(src)
                 ]
                 if filters:
                     command += ["-vf", ",".join(filters)]
                 command += [
-                    "-c:v",
-                    "h264_qsv",
-                    "-global_quality",
-                    "23",
-                    "-fps_mode",  # Force CFR to fix web audio/video sync
-                    "cfr",
-                    "-pix_fmt",   # Force 8-bit standard format
-                    "nv12",
+                    "-c:v", "h264_qsv",
+                    "-global_quality", "23",
+                    "-fps_mode", "cfr",
+                    "-pix_fmt", "nv12",
                 ] + audio_args + [
-                    "-movflags",
-                    "+faststart",
-                    str(temp_dst),
+                    "-movflags", "+faststart", str(temp_dst)
                 ]
             else:
-                # Linux: VA-API
-                filters = ["format=nv12"]  # nv12 format ensures 8-bit processing for VA-API
+                filters = ["format=nv12"]
                 if downscale:
                     filters.append(
                         f"scale=-2:{THRESHOLD}" if w >= h else f"scale={THRESHOLD}:-2"
@@ -261,43 +258,24 @@ def process_videos(root_dir):
 
                 command = (
                     [
-                        "ffmpeg",
-                        "-y",
-                        "-vaapi_device",
-                        "/dev/dri/renderD128",
-                        "-threads",
-                        str(CPU_THREADS),
-                        "-i",
-                        str(src),
-                        "-vf",
-                        ",".join(filters) + ",hwupload",
-                        "-c:v",
-                        "h264_vaapi",
-                        "-qp",
-                        "23",
-                        "-fps_mode",  # Force CFR to fix web audio/video sync
-                        "cfr",
+                        "ffmpeg", "-y",
+                        "-vaapi_device", "/dev/dri/renderD128",
+                        "-threads", str(CPU_THREADS),
+                        "-i", str(src),
+                        "-vf", ",".join(filters) + ",hwupload",
+                        "-c:v", "h264_vaapi",
+                        "-qp", "23",
+                        "-fps_mode", "cfr",
                     ]
                     + audio_args
                     + [
-                        "-movflags",
-                        "+faststart",
-                        str(temp_dst),
+                        "-movflags", "+faststart", str(temp_dst)
                     ]
                 )
         else:
             command = [
-                "ffmpeg",
-                "-y",
-                "-v",
-                "error",
-                "-i",
-                str(src),
-                "-c",
-                "copy",
-                "-movflags",
-                "+faststart",
-                str(temp_dst),
+                "ffmpeg", "-y", "-v", "error", "-i", str(src),
+                "-c", "copy", "-movflags", "+faststart", str(temp_dst)
             ]
 
         try:
@@ -315,10 +293,7 @@ def process_videos(root_dir):
             process.wait()
 
             if process.returncode == 0:
-                # Atomically replace destination file
                 temp_dst.replace(dst)
-
-                # Cleanup original file if extension changed
                 if src != dst and src.exists():
                     src.unlink()
                     print(f"\n[✔] Done (Replaced original {src.name})")
@@ -328,7 +303,6 @@ def process_videos(root_dir):
                 if temp_dst.exists():
                     temp_dst.unlink()
                 print(f"\n[!] Failed (ffmpeg exit code {process.returncode})")
-
         except Exception as e:
             if temp_dst.exists():
                 temp_dst.unlink()
@@ -347,12 +321,10 @@ def merge_sequential_videos(base_dir):
     print(f"\n[*] Scanning for sequential files to merge in: {base_dir}")
     merged_count = 0
 
-    # Traverse all directories starting from the base directory
     for root, dirs, files in os.walk(base_dir):
         folder_name = os.path.basename(root)
         seq_files = []
 
-        # Match files like "1.mp4", "1-9.mp4", "folder_1-9.mp4", "folder10.mp4"
         pattern = re.compile(
             rf"^(?:{re.escape(folder_name)}[-_]?)?(\d+)(?:-(\d+))?\.mp4$", re.IGNORECASE
         )
@@ -367,13 +339,10 @@ def merge_sequential_videos(base_dir):
         if not seq_files:
             continue
 
-        # Sort by start ASC, end DESC (prefers longer pre-merged ranges like 1-9 over 1)
         seq_files.sort(key=lambda x: (x["start"], -x["end"]))
-
         valid_chain = []
         expected_next_start = None
 
-        # Build the continuous file chain
         for curr in seq_files:
             if expected_next_start is None:
                 valid_chain.append(curr)
@@ -383,20 +352,16 @@ def merge_sequential_videos(base_dir):
                     valid_chain.append(curr)
                     expected_next_start = curr["end"] + 1
                 elif curr["start"] < expected_next_start:
-                    # Ignore overlapping sequences (e.g., skip 1.mp4 if 1-9.mp4 is already active)
                     continue
                 else:
-                    # Stop at the first gap
                     break
 
-        # Require at least 2 files to merge
         if len(valid_chain) < 2:
             continue
 
         min_num = valid_chain[0]["start"]
         max_num = valid_chain[-1]["end"]
 
-        # Define output file name with underscore
         output = f"{folder_name}_{min_num}-{max_num}.mp4"
         output_path = os.path.join(root, output)
 
@@ -407,47 +372,24 @@ def merge_sequential_videos(base_dir):
         print(f"\n[+] Merging {len(inputs)} files into {output} in {root}")
         ts_files = []
 
-        # Step 1: Convert to TS
         for i, video in enumerate(inputs):
             ts_file = f"temp_{i}.ts"
             ts_files.append(ts_file)
             cmd_convert = [
-                "ffmpeg",
-                "-y",
-                "-v",
-                "error",
-                "-i",
-                video,
-                "-c",
-                "copy",
-                "-bsf:v",
-                "h264_mp4toannexb",
-                "-f",
-                "mpegts",
-                ts_file,
+                "ffmpeg", "-y", "-v", "error", "-i", video,
+                "-c", "copy", "-bsf:v", "h264_mp4toannexb",
+                "-f", "mpegts", ts_file
             ]
             subprocess.run(cmd_convert, cwd=root, check=True)
 
-        # Step 2: Merge TS with faststart optimization applied immediately
         concat_string = "concat:" + "|".join(ts_files)
         cmd_merge = [
-            "ffmpeg",
-            "-y",
-            "-v",
-            "error",
-            "-i",
-            concat_string,
-            "-c",
-            "copy",
-            "-bsf:a",
-            "aac_adtstoasc",
-            "-movflags",
-            "+faststart",
-            output,
+            "ffmpeg", "-y", "-v", "error", "-i", concat_string,
+            "-c", "copy", "-bsf:a", "aac_adtstoasc",
+            "-movflags", "+faststart", output
         ]
         subprocess.run(cmd_merge, cwd=root, check=True)
 
-        # Step 3: Cleanup
         for ts in ts_files:
             ts_path = os.path.join(root, ts)
             if os.path.exists(ts_path):
@@ -464,9 +406,5 @@ def merge_sequential_videos(base_dir):
 
 if __name__ == "__main__":
     base_directory = Path.cwd()
-
-    # Process/transcode first so merge step receives standardized files
     process_videos(base_directory)
-
-    # Merge sequential files after transcoding
     merge_sequential_videos(base_directory)
